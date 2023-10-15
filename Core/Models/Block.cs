@@ -3,7 +3,7 @@
 public class Block
 {
     public uint BlockNum { get; }
-    public int Hash => CalculateHash();
+    public int Hash { get; set; }
     public int PrevHash { get; }
     public uint Nonce { get; set; }
     public string Data { get; }
@@ -17,13 +17,13 @@ public class Block
         AuthorAddress = authorAddress;
     }
 
-    private int CalculateHash()
+    public int CalculateHash()
     {
         return PrevHash ^ unchecked((int)(Nonce * 127312231)) ^ Data.GetHashCode() ^ unchecked((int)(BlockNum * 7658123717)) ^ AuthorAddress.GetHashCode();
     }
 
     public override string ToString()
     {
-        return $"Block:\n\tHash: {Hash}\n\tPrevHash: {PrevHash}\n\tNonce: {Nonce}\n\tData: {Data}";
+        return $"\n\tAuthor: {AuthorAddress}\n\tBlockNum: {BlockNum}\n\tHash: {Hash}\n\tPrevHash: {PrevHash}\n\tNonce: {Nonce}\n\tData: {Data}\n\t";
     }
 }

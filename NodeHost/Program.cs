@@ -19,6 +19,7 @@ app.UseAuthorization();
 app.MapControllers();
 var nodeService = app.Services.GetRequiredService<INodeService>();
 await nodeService.NotifyConnectionService();
+await nodeService.SyncBlocks();
 _ = nodeService.MineBlock();
 
 app.Run();

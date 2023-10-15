@@ -2,7 +2,9 @@
 using Core.Services.Interfaces;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 
 namespace Core.Services
 {
@@ -11,14 +13,16 @@ namespace Core.Services
         private readonly string _connectionCenterAddress;
         private readonly string _address;
         private readonly List<Block> _blocks = new();
+        private readonly object _lck = new();
         private readonly Dictionary<string, (Block block, int ackAmount)> _pendingBlocksMap = new();
-
+        private readonly ILogger<NodeService> _logger;
         private CancellationTokenSource _miningCTS = new();
 
-        public NodeService(IConfiguration configuration)
+        public NodeService(IConfiguration configuration, ILogger<NodeService> logger)
         {
             _connectionCenterAddress = configuration.GetRequiredSection("connectionCenterUrl").Value!;
             _address = configuration.GetRequiredSection(WebHostDefaults.ServerUrlsKey).Value!;
+            _logger = logger;
         }
 
         public IEnumerable<Block> GetBlocks()
@@ -28,52 +32,81 @@ namespace Core.Services
 
         public async Task MineBlock()
         {
-            await SyncBlocks();
+            await Task.Yield();
+            _logger.LogInformation("Start mining");
             var lastBlock = _blocks.Last();
             var block = new Block(lastBlock.Hash, DateTime.UtcNow.ToString(), lastBlock.BlockNum + 1, _address);
+            block.Hash = block.CalculateHash();
             _miningCTS = new();
             while (!IsBlockValid(block) && !_miningCTS.Token.IsCancellationRequested)
             {
                 block.Nonce++;
+                block.Hash = block.CalculateHash();
             }
 
             if (_miningCTS.Token.IsCancellationRequested)
             {
+                _logger.LogInformation("Mining stopped");
                 return;
             }
 
+            _logger.LogInformation($"Mined a block {block}");
             await ReceiveBlock(block);
         }
 
-        public async Task ReceiveBlock(Block block)
+        public async Task ReceiveBlock(Block newBlock)
         {
-            if (!IsBlockValid(block))
+            _logger.LogInformation($"Received a block {newBlock}");
+            if (!IsBlockValid(newBlock))
             {
                 return;
+            }
+
+            if (newBlock.BlockNum != _blocks.Last().BlockNum + 1)
+            {
+                await SyncBlocks();
             }
 
             // TODO: start mining when receive
             _miningCTS.Cancel();
 
-            if (!_pendingBlocksMap.TryGetValue(block.AuthorAddress, out var res))
+            bool isExist;
+            (Block block, int ackAmount) res;
+
+            lock (_lck)
             {
-                _pendingBlocksMap[block.AuthorAddress] = (block, 1);
-                await CommunicateNewBlock(block);
+                isExist = _pendingBlocksMap.TryGetValue(newBlock.AuthorAddress, out res);
+            }
+            if (!isExist)
+            {
+                lock (_lck)
+                {
+                    var amnt = _blocks.Any(x => x.AuthorAddress == _address) ? 1 : 0;
+                    _pendingBlocksMap[newBlock.AuthorAddress] = (newBlock, 1);
+                }
+                await CommunicateNewBlock(newBlock);
             }
             else
             {
-                _pendingBlocksMap[block.AuthorAddress] = (res.block, res.ackAmount++);
+                lock (_lck)
+                {
+                    _pendingBlocksMap[newBlock.AuthorAddress] = (res.block, res.ackAmount + 1);
+                }
             }
 
-            res = _pendingBlocksMap[block.AuthorAddress];
+            res = _pendingBlocksMap[newBlock.AuthorAddress];
 
-            await SyncBlocks();
             var decisiveNodesAmount = Math.Ceiling(_blocks.Select(x => x.AuthorAddress).Distinct().Count() / 2f);
 
             // TODO: add resolving when half <-> half
             if (res.ackAmount >= decisiveNodesAmount)
             {
-                _blocks.Add(block);
+                lock (_lck)
+                {
+                    _blocks.Add(newBlock);
+                    _pendingBlocksMap.Clear();
+                }
+                _logger.LogInformation("Added a block");
                 _ = MineBlock();
             }
         }
@@ -84,21 +117,10 @@ namespace Core.Services
 
             var response = await httpClient.PutAsJsonAsync(_connectionCenterAddress + "/add", new Node(_address));
             response.EnsureSuccessStatusCode();
+            _logger.LogInformation("Notified communication service");
         }
 
-        private async Task CommunicateNewBlock(Block block)
-        {
-            var nodes = await GetNodes();
-
-            foreach (var node in nodes.Where(x => x.Address != _address))
-            {
-                var httpClien = new HttpClient();
-
-                _ = httpClien.PostAsJsonAsync(node.Address + "/new-block", block);
-            }
-        }
-
-        private async Task SyncBlocks()
+        public async Task SyncBlocks()
         {
             var nodes = await GetNodes();
             var node = nodes.FirstOrDefault(x => x.Address != _address);
@@ -107,7 +129,10 @@ namespace Core.Services
             {
                 if (!_blocks.Any())
                 {
-                    _blocks.Add(new(0, "first block", 0, _address));
+                    lock (_lck)
+                    {
+                        _blocks.Add(new(0, "first block", 0, _address));
+                    }
                 }
                 return;
             }
@@ -118,8 +143,23 @@ namespace Core.Services
             response.EnsureSuccessStatusCode();
 
             var blocks = await response.Content.ReadFromJsonAsync<IEnumerable<Block>>();
-            _blocks.Clear();
-            _blocks.AddRange(blocks!);
+            lock (_lck)
+            {
+                _blocks.Clear();
+                _blocks.AddRange(blocks!);
+            }
+        }
+
+        private async Task CommunicateNewBlock(Block block)
+        {
+            var nodes = await GetNodes();
+
+            foreach (var node in nodes.Where(x => x.Address != _address && x.Address != block.AuthorAddress))
+            {
+                var httpClien = new HttpClient();
+
+                _ = httpClien.PostAsJsonAsync(node.Address + "/new-block", block);
+            }
         }
 
         private async Task<IEnumerable<Node>> GetNodes()
@@ -137,7 +177,7 @@ namespace Core.Services
 
         private static bool IsBlockValid(Block block)
         {
-            return block.Hash % 56123151 == 0;
+            return block.Hash % 56121251 == 0;
         }
     }
 }

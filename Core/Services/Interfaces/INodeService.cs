@@ -6,6 +6,7 @@ namespace Core.Services.Interfaces
     {
         IEnumerable<Block> GetBlocks();
         Task MineBlock();
+        Task SyncBlocks();
         Task ReceiveBlock(Block block);
         Task NotifyConnectionService();
     }
