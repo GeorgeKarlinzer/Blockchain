@@ -17,10 +17,6 @@ public class Block
         AuthorAddress = authorAddress;
     }
 
-    public int CalculateHash()
-    {
-        return PrevHash ^ unchecked((int)(Nonce * 127312231)) ^ Data.GetHashCode() ^ unchecked((int)(BlockNum * 7658123717)) ^ AuthorAddress.GetHashCode();
-    }
 
     public override string ToString()
     {

@@ -1,6 +1,7 @@
 using Core.Models;
 using Core.Services.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using System.Web;
 
 namespace NodeHost.Controllers
 {
@@ -10,9 +11,10 @@ namespace NodeHost.Controllers
     {
         private readonly INodeService _nodeService;
 
-        public NodeController(INodeService nodeService)
+        public NodeController(IConfiguration configuration, INodeServiceFactory factory)
         {
-            _nodeService = nodeService;
+            var address = configuration.GetRequiredSection(WebHostDefaults.ServerUrlsKey).Value!;
+            _nodeService = factory.GetOrCreateNodeService(address);
         }
 
         [HttpGet]
@@ -22,11 +24,35 @@ namespace NodeHost.Controllers
             return Ok(_nodeService.GetBlocks());
         }
 
-        [HttpPost]
-        [Route("/new-block")]
-        public async Task<ActionResult> ReceiveNewBlock(Block block)
+        [HttpGet]
+        [Route("/get-block/{index}")]
+        public ActionResult<Block?> GetBlock(int index)
         {
-            await _nodeService.ReceiveBlock(block);
+            var block = _nodeService.GetBlocks().FirstOrDefault(x => x.BlockNum == index);
+            return Ok(block);
+        }
+
+        [HttpPost]
+        [Route("/add-block/{address}")]
+        public async Task<ActionResult> ReceiveNewBlock(string address, Block block)
+        {
+            var addr = HttpUtility.UrlDecode(address);
+            await _nodeService.ReceiveBlock(new(addr), block);
+            return Ok();
+        }
+
+        [HttpGet]
+        [Route("/get-nodes")]
+        public ActionResult<IEnumerable<Node>> GetNodes()
+        {
+            return Ok(_nodeService.GetNodes());
+        }
+
+        [HttpPost]
+        [Route("/add-node")]
+        public ActionResult AddNode(Node node)
+        {
+            _nodeService.AddNode(node);
             return Ok();
         }
     }
